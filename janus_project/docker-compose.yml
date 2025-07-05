@@ -1,0 +1,127 @@
+# docker-compose.yml
+
+# We specify version 3.8, which is a modern and stable version of the Compose file format.
+# This ensures compatibility and access to the latest features.
+version: '3.8'
+
+# 'services' is the main section where we define each of our containers.
+# Each key under 'services' (e.g., 'apache', 'django_app') becomes a service
+# and also a hostname within our private Docker network.
+services:
+
+  # Service 1: The Apache Reverse Proxy (The Gatekeeper)
+  apache:
+    # We use the official Apache HTTP Server image from Docker Hub.
+    # The '2.4' tag specifies the version, ensuring our setup is predictable.
+    image: httpd:2.4
+    # 'container_name' gives our container a specific, predictable name.
+    container_name: janus_apache_proxy
+    # 'ports' maps a port on your local machine (host) to a port inside the container.
+    # We map port 80 on your machine to port 80 in the Apache container.
+    # This makes our application accessible via http://localhost in your browser.
+    ports:
+      - "80:80"
+    # 'volumes' mount a host path or a named volume into the container.
+    # This is how we provide our custom Apache configuration to the container.
+    # We will create the 'httpd.conf' file in the next steps.
+    volumes:
+      - ./apache/httpd.conf:/usr/local/apache2/conf/httpd.conf
+    # 'depends_on' tells Docker to start the 'django_app' container BEFORE starting this one.
+    # This ensures our web app is ready to receive traffic from the proxy.
+    depends_on:
+      - django_app
+    # Connects this service to our custom network defined at the bottom of the file.
+    networks:
+      - janus_network
+
+  # Service 2: The Django Web Application (The Command Center)
+  django_app:
+    container_name: janus_django_app
+    # The 'build' instruction tells Docker Compose to build an image from a Dockerfile
+    # instead of pulling a pre-made one from Docker Hub.
+    build:
+      # 'context' specifies the directory containing the Dockerfile and our source code.
+      context: ./django_app
+      # 'dockerfile' specifies the name of the file to use for the build.
+      dockerfile: Dockerfile
+    # We mount the 'django_app' directory from our host into the container.
+    # This is fantastic for development, as any changes you make to the Python code
+    # on your machine will be immediately reflected inside the container without a rebuild.
+    volumes:
+      - ./django_app:/app
+    # We expose port 8000 internally on the Docker network. We don't map it to the host
+    # because only the Apache proxy needs to talk to it.
+    expose:
+      - "8000"
+    # This service depends on the database and the router being available first.
+    depends_on:
+      - mongodb
+      - smart_router
+    networks:
+      - janus_network
+
+  # Service 3: The MongoDB Database (The Archive)
+  mongodb:
+    # We use the official MongoDB image.
+    image: mongo:latest
+    container_name: janus_mongodb
+    # We create a 'named volume' called 'mongodb_data'. Docker manages this volume.
+    # This is the correct way to persist database data. Even if we remove the container,
+    # this data will remain safe in the volume, ready to be re-attached.
+    volumes:
+      - mongodb_data:/data/db
+    # We expose the default MongoDB port to the internal network.
+    expose:
+      - "27017"
+    networks:
+      - janus_network
+
+  # Service 4: The Smart Router Agent (The Dispatcher)
+  smart_router:
+    container_name: janus_smart_router
+    # Like Django, we build this service from its own Dockerfile.
+    build:
+      context: ./smart_router
+      dockerfile: Dockerfile
+    # We mount the source code for easy development.
+    volumes:
+      - ./smart_router:/app
+    # We expose its port internally for Django to communicate with it.
+    expose:
+      - "5001"
+    depends_on:
+      - data_miner
+    networks:
+      - janus_network
+
+  # Service 5: The Data Miner Agent (The Worker)
+  data_miner:
+    container_name: janus_data_miner
+    # Build from its own Dockerfile.
+    build:
+      context: ./data_miner
+      dockerfile: Dockerfile
+    # Mount source code.
+    volumes:
+      - ./data_miner:/app
+    # Expose port for the Smart Router to communicate with it.
+    expose:
+      - "5002"
+    depends_on:
+      - mongodb
+    networks:
+      - janus_network
+
+# 'networks' defines the networking configuration for our services.
+networks:
+  # We create a custom 'bridge' network. Services on the same bridge network
+  # can communicate with each other using their service names as hostnames
+  # (e.g., the Django app can connect to 'mongodb:27017').
+  # This provides better isolation and organization than the default network.
+  janus_network:
+    driver: bridge
+
+# 'volumes' is where we define the named volumes used by our services.
+volumes:
+  # This formally creates the 'mongodb_data' volume we attached to the mongodb service.
+  mongodb_data:
